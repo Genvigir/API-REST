@@ -2,10 +2,14 @@ require('dotenv').config();
 const express = require('express');
 const app = express();
 
-app.use(express.json()); // Suporte para JSON
-app.use(express.urlencoded({ extended: true })); // Suporte para URL-encoded
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// Rota inicial para testar
+const usersRoutes = require('./routes/users.routes');
+const installRoutes = require('./routes/install.routes');
+
+app.use('/users', usersRoutes);
+app.use('/install', installRoutes);
 app.get('/', (req, res) => {
     res.status(200).send('API funcionando!');
 });
