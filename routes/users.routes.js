@@ -1,214 +1,179 @@
 const express = require('express');
 const fs = require('fs');
-const path = require('path');
-const bcrypt = require('bcryptjs');
+const bcrypt = require('bcrypt');
+const { v4: uuidv4 } = require('uuid');
+const jwt = require('jsonwebtoken');
 const router = express.Router();
 const authenticateToken = require('../middlewares/authMiddleware');
+const authorizeRole = require('../middlewares/authorizeRole');
+require('dotenv').config();
 
-// Caminho para o arquivo de dados de usuários
-const usersFilePath = path.join(__dirname, '../data/users.json');
+// Caminho para o arquivo JSON dos usuários
+const usersFilePath = './data/users.json';
 
-// Função para ler o arquivo de usuários com tratamento de erro
-const readUsersFile = () => {
-    try {
-        return JSON.parse(fs.readFileSync(usersFilePath, 'utf-8'));
-    } catch (error) {
-        throw new Error('Erro ao ler o arquivo de usuários.');
+// Função para carregar usuários
+const loadUsers = () => {
+    if (fs.existsSync(usersFilePath)) {
+        return JSON.parse(fs.readFileSync(usersFilePath));
     }
+    return [];
 };
 
-// Função para escrever no arquivo de usuários com tratamento de erro
-const writeUsersFile = (users) => {
-    try {
-        fs.writeFileSync(usersFilePath, JSON.stringify(users, null, 2));
-    } catch (error) {
-        throw new Error('Erro ao salvar os dados de usuários.');
-    }
+// Função para salvar usuários
+const saveUsers = (users) => {
+    fs.writeFileSync(usersFilePath, JSON.stringify(users, null, 2));
 };
 
-// Rota para listar usuários (qualquer usuário autenticado pode acessar)
-router.get('/', authenticateToken, (req, res) => {
-    try {
-        const users = readUsersFile();
-        res.status(200).json(users);
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-});
+// Rota para cadastrar um novo usuário
+router.post('/users', async (req, res) => {
+    const { username, password, email, role } = req.body;
 
-// Rota para criar um novo usuário (somente administrador pode criar)
-router.post('/', authenticateToken, async (req, res) => {
-    try {
-        if (req.user.role !== 'admin') {
-            return res.status(403).json({ message: 'Acesso negado. Apenas administradores podem criar usuários.' });
-        }
-
-        const { username, password, role } = req.body;
-        const users = readUsersFile();
-
-        // Verifica se o nome de usuário já está em uso
-        const existingUser = users.find((user) => user.username === username);
-        if (existingUser) {
-            return res.status(400).json({ message: 'Usuário já existe' });
-        }
-
-        // Criptografa a senha
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const newUser = {
-            id: users.length + 1,
-            username,
-            password: hashedPassword,
-            role: role || 'user', // Define o papel do usuário, podendo ser 'user' ou 'admin'
-        };
-
-        users.push(newUser);
-        writeUsersFile(users);
-
-        res.status(201).json({ message: 'Usuário criado com sucesso', user: { ...newUser, password: undefined } });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-});
-
-// Rota para editar dados de um usuário (somente o próprio usuário ou administrador pode editar)
-router.put('/:id', authenticateToken, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { username, password, role } = req.body;
-
-        const users = readUsersFile();
-        const userIndex = users.findIndex((user) => user.id === parseInt(id));
-
-        if (userIndex === -1) {
-            return res.status(404).json({ message: 'Usuário não encontrado' });
-        }
-
-        const user = users[userIndex];
-
-        // Verifica se o usuário pode editar
-        if (user.id !== req.user.id && req.user.role !== 'admin') {
-            return res.status(403).json({ message: 'Acesso negado. Você só pode editar seus próprios dados.' });
-        }
-
-        // Atualiza os dados do usuário
-        user.username = username || user.username;
-        user.password = password ? await bcrypt.hash(password, 10) : user.password; // Se a senha for alterada, criptografa a nova
-        user.role = role || user.role;
-
-        users[userIndex] = user;
-        writeUsersFile(users);
-
-        res.status(200).json({ message: 'Usuário atualizado com sucesso', user });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-});
-
-// Rota para excluir um usuário (somente administrador pode excluir)
-router.delete('/:id', authenticateToken, (req, res) => {
-    try {
-        const { id } = req.params;
-
-        const users = readUsersFile();
-        const userIndex = users.findIndex((user) => user.id === parseInt(id));
-
-        if (userIndex === -1) {
-            return res.status(404).json({ message: 'Usuário não encontrado' });
-        }
-
-        const user = users[userIndex];
-
-        // Verifica se o usuário tem permissão para excluir
-        if (req.user.role !== 'admin') {
-            return res.status(403).json({ message: 'Acesso negado. Somente administradores podem excluir usuários.' });
-        }
-
-        users.splice(userIndex, 1); // Remove o usuário do array
-        writeUsersFile(users);
-
-        res.status(200).json({ message: 'Usuário excluído com sucesso', user });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-});
-
-const { check, validationResult } = require('express-validator');
-
-// Validação de entrada no cadastro
-router.post(
-  "/register",
-  [
-    check("name").notEmpty().withMessage("O nome é obrigatório."),
-    check("email").isEmail().withMessage("E-mail inválido."),
-    check("password").isLength({ min: 6 }).withMessage("A senha deve ter pelo menos 6 caracteres."),
-  ],
-  (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+    if (!username || !password || !email) {
+        return res.status(400).json({ error: 'Todos os campos (username, password, email) são obrigatórios.' });
     }
 
-    // Lógica de cadastro
-    const user = req.body;
-    // Restante da lógica para salvar o usuário
-  }
-);
+    const users = loadUsers();
 
-const fs = require('fs');
-const bcrypt = require('bcryptjs');
+    if (users.some(user => user.username === username)) {
+        return res.status(409).json({ error: 'O nome de usuário já está em uso.' });
+    }
 
-router.get("/install", async (req, res) => {
-  try {
-    const admin = {
-      id: "admin-id",
-      name: "Admin",
-      email: "admin@example.com",
-      password: await bcrypt.hash("admin123", 10),
-      role: "admin"
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const newUser = {
+        id: uuidv4(),
+        username,
+        email,
+        password: hashedPassword,
+        role: role || 'user',
+        createdAt: new Date()
     };
 
-    const usersFile = './data/users.json';
-    let users = [];
-    
-    if (fs.existsSync(usersFile)) {
-      const data = fs.readFileSync(usersFile);
-      users = JSON.parse(data);
-    }
+    users.push(newUser);
+    saveUsers(users);
 
-    const adminExists = users.find((u) => u.role === "admin");
-    if (adminExists) {
-      return res.status(400).json({ message: "Administrador já existe." });
-    }
-
-    users.push(admin);
-    fs.writeFileSync(usersFile, JSON.stringify(users, null, 2));
-    res.status(201).json({ message: "Administrador criado com sucesso!" });
-  } catch (error) {
-    res.status(500).json({ message: "Erro ao criar administrador." });
-  }
+    res.status(201).json({ message: 'Usuário criado com sucesso!', user: { id: newUser.id, username: newUser.username, email: newUser.email } });
 });
 
-router.get("/report", (req, res) => {
-    const data = JSON.parse(fs.readFileSync('./data/users.json'));
-    const totalUsers = data.length;
-    const adminCount = data.filter(user => user.role === 'admin').length;
-    const commonUsers = totalUsers - adminCount;
-  
-    res.json({
-      totalUsers,
-      adminCount,
-      commonUsers,
-    });
-  });
-  
-  router.get("/users", (req, res) => {
-  const { limite = 5, pagina = 1 } = req.query;
-  const data = JSON.parse(fs.readFileSync('./data/users.json'));
+// Rota para criar um novo administrador
+router.post('/users/admin', authenticateToken, authorizeRole('admin'), async (req, res) => {
+    const { username, password, email } = req.body;
 
-  const startIndex = (pagina - 1) * limite;
-  const paginatedData = data.slice(startIndex, startIndex + Number(limite));
+    if (!username || !password || !email) {
+        return res.status(400).json({ error: 'Todos os campos (username, password, email) são obrigatórios.' });
+    }
 
-  res.json(paginatedData);
+    const users = loadUsers();
+
+    if (users.some(user => user.username === username)) {
+        return res.status(409).json({ error: 'O nome de usuário já está em uso.' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const newAdmin = {
+        id: uuidv4(),
+        username,
+        email,
+        password: hashedPassword,
+        role: 'admin',
+        createdAt: new Date()
+    };
+
+    users.push(newAdmin);
+    saveUsers(users);
+
+    res.status(201).json({ message: 'Administrador criado com sucesso!', admin: { id: newAdmin.id, username: newAdmin.username, email: newAdmin.email } });
+});
+
+// Rota para excluir um usuário não administrador
+router.delete('/users/:id', authenticateToken, authorizeRole('admin'), (req, res) => {
+    const { id } = req.params;
+
+    let users = loadUsers();
+
+    const userIndex = users.findIndex(user => user.id === id);
+    if (userIndex === -1) {
+        return res.status(404).json({ error: 'Usuário não encontrado.' });
+    }
+
+    if (users[userIndex].role === 'admin') {
+        return res.status(403).json({ error: 'Não é permitido excluir administradores.' });
+    }
+
+    users.splice(userIndex, 1);
+    saveUsers(users);
+
+    res.status(200).json({ message: 'Usuário excluído com sucesso.' });
+});
+
+// Rota para login e geração de token JWT
+router.post('/login', (req, res) => {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+        return res.status(400).json({ error: 'Usuário e senha são obrigatórios.' });
+    }
+
+    const users = loadUsers();
+    const user = users.find(u => u.username === username);
+
+    if (!user || !bcrypt.compareSync(password, user.password)) {
+        return res.status(401).json({ error: 'Credenciais inválidas.' });
+    }
+
+    const token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    res.status(200).json({ message: 'Login bem-sucedido.', token });
+});
+
+// Rota para alterar dados pessoais
+router.put('/users/:id', authenticateToken, (req, res) => {
+    const { id } = req.params;
+    const { username, email, password } = req.body;
+    const users = loadUsers();
+    const userIndex = users.findIndex(user => user.id === id);
+
+    if (userIndex === -1) {
+        return res.status(404).json({ error: 'Usuário não encontrado.' });
+    }
+
+    const currentUser = users[userIndex];
+
+    if (req.user.id !== id && req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Você não tem permissão para alterar este usuário.' });
+    }
+
+    if (username) currentUser.username = username;
+    if (email) currentUser.email = email;
+    if (password) currentUser.password = bcrypt.hashSync(password, 10);
+
+    users[userIndex] = currentUser;
+    saveUsers(users);
+
+    res.status(200).json({ message: 'Dados atualizados com sucesso.', user: { id: currentUser.id, username: currentUser.username, email: currentUser.email } });
+});
+
+// Rota para instalação do sistema
+router.get('/install', (req, res) => {
+    const users = loadUsers();
+
+    if (users.some(user => user.role === 'admin')) {
+        return res.status(400).json({ error: 'Já existe um administrador no sistema.' });
+    }
+
+    const defaultAdmin = {
+        id: uuidv4(),
+        username: 'admin',
+        email: 'admin@example.com',
+        password: bcrypt.hashSync('admin123', 10),
+        role: 'admin',
+        createdAt: new Date()
+    };
+
+    users.push(defaultAdmin);
+    saveUsers(users);
+
+    res.status(201).json({ message: 'Administrador padrão criado com sucesso.', admin: { id: defaultAdmin.id, username: defaultAdmin.username, email: defaultAdmin.email } });
 });
 
 module.exports = router;
