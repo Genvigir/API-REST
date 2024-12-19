@@ -1,59 +1,50 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
-const { readJsonFile, writeJsonFile } = require('../utils/fileUtils');
-const { v4: uuidv4 } = require('uuid');
+const bcrypt = require('bcryptjs');
 const router = express.Router();
+const authenticateToken = require('../middlewares/authMiddleware');
 
-const usersFile = path.join(__dirname, '../users.json');
+const usersFilePath = path.join(__dirname, '../data/users.json');
 
-// Rota para criar o administrador inicial
-router.get('/install', (req, res) => {
-    const adminUser = {
-        id: 1,
-        username: 'admin',
-        password: 'admin123',
-        role: 'admin'
-    };
+const fileExists = (filePath) => fs.existsSync(filePath);
 
-    if (!fs.existsSync(usersFile)) {
-        writeJsonFile(usersFile, [adminUser]);
-        res.status(201).send('Usuário administrador criado com sucesso!');
-    } else {
-        res.status(400).send('O sistema já foi instalado.');
+router.get('/', authenticateToken, (req, res) => {
+    if (!fileExists(usersFilePath)) {
+        return res.status(500).json({ message: 'Arquivo de usuários não encontrado.' });
     }
-});
 
-// Rota para listar todos os usuários
-router.get('/all', (req, res) => {
-    const users = readJsonFile(usersFile);
+    const users = JSON.parse(fs.readFileSync(usersFilePath, 'utf-8'));
     res.status(200).json(users);
 });
 
-// Rota para cadastrar um novo usuário
-router.post('/register', (req, res) => {
+router.post('/', authenticateToken, async (req, res) => {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ message: 'Acesso negado. Apenas administradores podem criar usuários.' });
+    }
+
     const { username, password, role } = req.body;
 
-    if (!username || !password) {
-        return res.status(400).json({ error: 'Usuário e senha são obrigatórios.' });
+    if (!fileExists(usersFilePath)) {
+        return res.status(500).json({ message: 'Arquivo de usuários não encontrado.' });
     }
 
-    const users = readJsonFile(usersFile);
-    if (users.find(user => user.username === username)) {
-        return res.status(400).json({ error: 'Usuário já existe.' });
+    const users = JSON.parse(fs.readFileSync(usersFilePath, 'utf-8'));
+
+    const existingUser = users.find((user) => user.username === username);
+    if (existingUser) {
+        return res.status(400).json({ message: 'Usuário já existe' });
     }
 
-    const newUser = {
-        id: uuidv4(),
-        username,
-        password,
-        role: role || 'user'
-    };
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const newUser = { id: users.length + 1, username, password: hashedPassword, role: role || 'user' };
 
     users.push(newUser);
-    writeJsonFile(usersFile, users);
+    fs.writeFileSync(usersFilePath, JSON.stringify(users, null, 2));
 
-    res.status(201).json({ message: 'Usuário cadastrado com sucesso.', user: newUser });
+    res.status(201).json({ message: 'Usuário criado com sucesso', user: { ...newUser, password: undefined } });
 });
+
+// Outras rotas (PUT e DELETE) podem seguir a mesma lógica.
 
 module.exports = router;

@@ -1,0 +1,10 @@
+{
+    "message": "Administrador criado com sucesso!",
+    "adminUser": {
+      "id": "ID_UNICO",
+      "username": "admin",
+      "password": "admin123",
+      "role": "admin"
+    }
+  }
+  
