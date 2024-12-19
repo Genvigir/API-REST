@@ -20,3 +20,23 @@ app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
 });
 
+const swaggerUi = require('swagger-ui-express');
+const swaggerJsdoc = require('swagger-jsdoc');
+
+const swaggerOptions = {
+  definition: {
+    openapi: "3.0.0",
+    info: {
+      title: "API REST",
+      version: "1.0.0",
+      description: "Documentação da API"
+    }
+  },
+  apis: ["./routes/*.js"], // Ajuste para a localização dos seus arquivos de rotas
+};
+
+const swaggerDocs = swaggerJsdoc(swaggerOptions);
+app.use("/docs", swaggerUi.serve, swaggerUi.setup(swaggerDocs));
+
+require('dotenv').config();
+
